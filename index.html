@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Тогызкумалак — блиц против ИИ</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+body {font-family:Arial,sans-serif;padding:16px;background:var(--tg-bg-color,#f5f5f7);color:var(--tg-text-color,#111);max-width:960px;margin:0 auto;}
+#board {display:inline-block;vertical-align:top;margin-right:20px;background:var(--tg-secondary-bg-color,white);padding:20px;border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,0.12);}
+.controls {display:inline-block;vertical-align:top;max-width:380px;}
+table {border-collapse:collapse;}
+td {width:52px;height:44px;text-align:center;vertical-align:middle;font-weight:700;font-size:18px;border:2px solid #d4c8a7;border-radius:10px;background:var(--tg-secondary-bg-color,#fffaf0);transition:all .2s;color:var(--tg-text-color);}
+.otau td {cursor:pointer;}
+.otau td:hover {background:var(--tg-button-color,#fffcdd) !important;transform:scale(1.08);box-shadow:0 4px 12px rgba(0,0,0,.15);}
+.otau td.tuz {background:#ff4757 !important;color:white !important;font-size:22px !important;}
+.numbering td {background:transparent !important;border:none !important;color:var(--tg-hint-color,#777);font-size:14px;cursor:default;}
+.kazan {background:linear-gradient(145deg,#a8d5ff,#4da8ff)!important;border:4px solid #1e88e5!important;width:80px;height:64px;font-size:26px!important;font-weight:900!important;color:#0d47a1!important;border-radius:16px!important;}
+button {margin:8px 4px 8px 0;padding:12px 20px;font-weight:600;font-size:16px;border:none;border-radius:12px;background:var(--tg-button-color,#007aff);color:var(--tg-button-text-color,white);cursor:pointer;transition:.2s;}
+button:hover {background:var(--tg-button-color,#0056cc);transform:translateY(-1px);}
+#moves {margin-top:16px;background:var(--tg-secondary-bg-color,white);padding:16px;border-radius:12px;border:1px solid var(--tg-hint-color,#e0e0e0);max-height:360px;overflow:auto;font-family:'Courier New',monospace;font-size:16px;line-height:1.6;white-space:pre-wrap;color:var(--tg-text-color);}
+#status {margin:16px 0;font-weight:800;font-size:20px;min-height:28px;color:var(--tg-text-color);}
+.timer {font-size:32px;font-weight:900;}
+.player-timer {color:#2c3e50;}
+.ai-timer {color:#c0392b;}
+.active-timer {color:#e74c3c;animation:pulse 1s infinite;}
+@keyframes pulse {0%{opacity:1} 50%{opacity:0.7} 100%{opacity:1}}
+select {padding:10px;font-size:16px;border-radius:8px;border:2px solid #ddd;background:var(--tg-secondary-bg-color,white);color:var(--tg-text-color);}
+@media (max-width:768px) {#board{display:block;margin-bottom:20px;}.controls{max-width:none;}}
+</style>
+</head>
+<body>
+<h1>Тогызкумалак — блиц против ИИ</h1>
+<p>У вас и у ИИ отдельные таймеры. ИИ думает до 2 секунд на ход. Вы можете выиграть по времени!</p>
+
+<div id="board"></div>
+
+<div class="controls">
+  <div>
+    <label>Время на партию (каждому): </label>
+    <select id="timeMode">
+      <option value="30">30 секунд</option>
+      <option value="40">40 секунд</option>
+      <option value="50">50 секунд</option>
+      <option value="60" selected>1 минута</option>
+    </select>
+  </div>
+  <div style="margin-top:12px;">
+    <button id="newBtn">Новая партия</button>
+    <button id="swapBtn">Я играю за: <span id="sideLabel">Белые (низ)</span></button>
+  </div>
+
+  <div style="margin-top:20px;font-size:18px;">
+    <div>Вы (<span id="playerSideLabel">Белые</span>): <span id="playerTimer" class="timer player-timer">01:00</span></div>
+    <div style="margin-top:8px;">ИИ (<span id="aiSideLabel">Чёрные</span>): <span id="aiTimer" class="timer ai-timer">01:00</span></div>
+  </div>
+
+  <div id="status" style="margin-top:20px;">Нажмите «Новая партия»</div>
+
+  <div id="moves">Ходы появятся здесь...</div>
+</div>
+
+<script>
+// Telegram WebApp integration
+Telegram.WebApp.ready();
+Telegram.WebApp.expand(); // Полноэкранный режим для лучшего опыта игры
+
+const array_size = 23;
+var toguzFields = new Array(array_size);
+var gameMoves = [];
+var finished = false;
+
+var playerTime = 60;
+var aiTime = 60;
+var playerSide = 0;   // 0 = белые (низ), 1 = чёрные (верх)
+var gameStarted = false;
+var timerInterval = null;
+var aiThinking = false;
+
+function msToTimeStr(totalSec){
+  if(totalSec < 0) totalSec = 0;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}:${sec.toString().padStart(2,'0')}`;
+}
+
+function updateTimers(){
+  document.getElementById('playerTimer').textContent = msToTimeStr(playerTime);
+  document.getElementById('aiTimer').textContent = msToTimeStr(aiTime);
+  const isPlayerTurn = (toguzFields[22] === playerSide);
+  document.getElementById('playerTimer').className = 'timer player-timer' + (isPlayerTurn && gameStarted && !aiThinking ? ' active-timer' : '');
+  document.getElementById('aiTimer').className = 'timer ai-timer' + (!isPlayerTurn && gameStarted && aiThinking ? ' active-timer' : '');
+}
+
+function stopTimer(){ if(timerInterval){ clearInterval(timerInterval); timerInterval=null; } }
+
+function startTimer(){
+  stopTimer();
+  timerInterval = setInterval(()=>{
+    if(toguzFields[22] === playerSide) playerTime--;
+    else aiTime--;
+
+    updateTimers();
+
+    if(playerTime <= 0 || aiTime <= 0){
+      stopTimer();
+      finished = true;
+      const winner = playerTime <= 0 ? 'ИИ' : 'Вы';
+      document.getElementById('status').textContent = `${winner} выиграли по времени!`;
+      show_board(); show_moves();
+    }
+  },1000);
+}
+
+function init_board(){
+  stopTimer();
+  finished = false;
+  gameMoves = [];
+  gameStarted = false;
+  aiThinking = false;
+
+  const base = parseInt(document.getElementById('timeMode').value);
+  playerTime = base;
+  aiTime = base;
+
+  for(let i=0;i<array_size;i++) toguzFields[i]=i<18?9:0;
+  toguzFields[22]=0; // белые начинают
+  toguzFields[20]=toguzFields[21]=0;
+
+  document.getElementById('playerSideLabel').textContent = playerSide===0?'Белые':'Чёрные';
+  document.getElementById('aiSideLabel').textContent = playerSide===0?'Чёрные':'Белые';
+
+  updateTimers();
+  show_board();
+  show_moves();
+  document.getElementById('status').textContent = 'Ход ' + (toguzFields[22]===0?'белых':'чёрных');
+}
+
+function show_board(){
+  let html="<table cellspacing='0'>";
+  html+=`<tr class='numbering'><td class='kazan' rowspan='4'>${toguzFields[19]}</td>`;
+  for(let i=9;i>0;i--) html+=`<td>${i}</td>`;
+  html+=`<td class='kazan' rowspan='4'>${toguzFields[18]}</td></tr>`;
+
+  html+="<tr class='otau'>";
+  for(let i=17;i>8;i--){
+    const val=toguzFields[i]===255?'X':toguzFields[i];
+    const cls=toguzFields[i]===255?'tuz':'';
+    html+=`<td class='${cls}' onclick='click_otau(${i})'>${val}</td>`;
+  }
+  html+="</tr><tr class='otau'>";
+  for(let i=0;i<9;i++){
+    const val=toguzFields[i]===255?'X':toguzFields[i];
+    const cls=toguzFields[i]===255?'tuz':'';
+    html+=`<td class='${cls}' onclick='click_otau(${i})'>${val}</td>`;
+  }
+  html+="</tr><tr class='numbering'>";
+  for(let i=1;i<10;i++) html+=`<td>${i}</td>`;
+  html+="</tr></table>";
+  document.getElementById('board').innerHTML=html;
+}
+
+function click_otau(num){
+  if(finished || toguzFields[22] !== playerSide || toguzFields[num]===0 || toguzFields[num]===255) return;
+  make_move(num);
+}
+
+function make_move(num){
+  if(finished) return;
+
+  const color = toguzFields[22];
+
+  if(!gameStarted){
+    gameStarted = true;
+    startTimer();
+  }
+
+  const numkum = toguzFields[num];
+  let sow = numkum===1 ? 1 : numkum-1;
+  toguzFields[num] = numkum===1 ? 0 : 1;
+  let pos = num;
+  for(let i=0;i<sow;i++){
+    pos = pos===17 ? 0 : pos+1;
+    if(toguzFields[pos]===255) toguzFields[pos>8 ? 18 : 19]++;
+    else toguzFields[pos]++;
+  }
+
+  let capturedTuzdyk = false;
+  if(toguzFields[pos]===3){
+    if(color===0 && toguzFields[20]===0 && pos>8 && pos<17 && toguzFields[21]!==pos-8){
+      toguzFields[18]+=3; toguzFields[pos]=255; toguzFields[20]=pos-8; capturedTuzdyk=true;
+    } else if(color===1 && toguzFields[21]===0 && pos<8 && toguzFields[20]!==pos+1){
+      toguzFields[19]+=3; toguzFields[pos]=255; toguzFields[21]=pos+1; capturedTuzdyk=true;
+    }
+  }
+
+  if(toguzFields[pos]%2===0 && toguzFields[pos]>0){
+    if(color===0 && pos>8){ toguzFields[18]+=toguzFields[pos]; toguzFields[pos]=0; }
+    if(color===1 && pos<9){ toguzFields[19]+=toguzFields[pos]; toguzFields[pos]=0; }
+  }
+
+  const from = num>8 ? num-8 : num+1;
+  const to = pos>8 ? pos-8 : pos+1;
+  let moveStr = `${from}${to}`;
+  if(capturedTuzdyk) moveStr += 'x';
+  gameMoves.push(moveStr);
+
+  toguzFields[22] = 1 - color;
+
+  check_position();
+}
+
+function check_position(){
+  let whiteOnBoard = 0;
+  for(let i=0;i<9;i++) if(toguzFields[i]<255) whiteOnBoard += toguzFields[i];
+  const blackOnBoard = 162 - whiteOnBoard - toguzFields[18] - toguzFields[19];
+
+  if(toguzFields[22]===0 && whiteOnBoard===0) toguzFields[19] += blackOnBoard;
+  if(toguzFields[22]===1 && blackOnBoard===0) toguzFields[18] += whiteOnBoard;
+
+  const playerKazan = playerSide===0 ? toguzFields[18] : toguzFields[19];
+  const aiKazan = playerSide===0 ? toguzFields[19] : toguzFields[18];
+
+  if(playerKazan >=82 || aiKazan >=82 || (toguzFields[18]===81 && toguzFields[19]===81)){
+    finished = true;
+    stopTimer();
+    if(playerKazan >=82) document.getElementById('status').textContent = 'Вы выиграли!';
+    else if(aiKazan >=82) document.getElementById('status').textContent = 'ИИ выиграл!';
+    else document.getElementById('status').textContent = 'Ничья 81:81';
+  } else {
+    document.getElementById('status').textContent = toguzFields[22]===playerSide ? 'Ваш ход!' : 'ИИ думает...';
+    if(toguzFields[22] !== playerSide){
+      aiThinking = true;
+      updateTimers();
+      setTimeout(aiRespond, 100);
+    }
+  }
+
+  show_board();
+  show_moves();
+  updateTimers();
+}
+
+function show_moves(){
+  let html = '';
+  for(let i=0; i<gameMoves.length; i++){
+    if(i % 2 === 0) html += `${Math.floor(i/2)+1}. ${gameMoves[i]}`;
+    else html += ` ${gameMoves[i]}`;
+    if(i % 2 === 1) html += '\n';
+  }
+  document.getElementById('moves').textContent = html || 'Ходы появятся здесь...';
+}
+
+/* AI — без изменений */
+function cloneState(s){return s.slice();}
+function genMovesFromState(state,player){
+  const moves=[]; const start=player*9;
+  for(let i=start;i<start+9;i++) if(state[i]>0 && state[i]!==255) moves.push(i);
+  return moves;
+}
+function applyMoveToState(state,fromIdx){
+  const s=cloneState(state); const color=s[22];
+  const numkum=s[fromIdx]; if(numkum===0||numkum===255) return s;
+  let sow=numkum===1?1:numkum-1; s[fromIdx]=numkum===1?0:1;
+  let numotau=fromIdx;
+  for(let i=0;i<sow;i++){
+    numotau=numotau===17?0:numotau+1;
+    if(s[numotau]===255) s[numotau>8?18:19]++;
+    else s[numotau]++;
+  }
+  if(s[numotau]===3){
+    if(color===0 && s[20]===0 && numotau>8 && numotau<17 && s[21]!==numotau-8){ s[18]+=3; s[numotau]=255; s[20]=numotau-8; }
+    else if(color===1 && s[21]===0 && numotau<8 && s[20]!==numotau+1){ s[19]+=3; s[numotau]=255; s[21]=numotau+1; }
+  }
+  if(s[numotau]%2===0 && s[numotau]>0){
+    if(color===0 && numotau>8){ s[18]+=s[numotau]; s[numotau]=0; }
+    else if(color===1 && numotau<9){ s[19]+=s[numotau]; s[numotau]=0; }
+  }
+  s[22]=1-color; return s;
+}
+function evaluateState(state,aiPlayer){
+  const aiK=aiPlayer===0?state[18]:state[19];
+  const oppK=aiPlayer===0?state[19]:state[18];
+  let aiP=0,oppP=0;
+  const aStart=aiPlayer*9, oStart=(1-aiPlayer)*9;
+  for(let i=aStart;i<aStart+9;i++) if(state[i]!==255) aiP+=state[i];
+  for(let i=oStart;i<oStart+9;i++) if(state[i]!==255) oppP+=state[i];
+  let sc=(aiK-oppK)*12 + (aiP-oppP)*0.6;
+  if(aiPlayer===0 && state[20]>0) sc+=30; if(aiPlayer===0 && state[21]>0) sc-=25;
+  if(aiPlayer===1 && state[21]>0) sc+=30; if(aiPlayer===1 && state[20]>0) sc-=25;
+  return sc;
+}
+function alphabeta(state,depth,alpha,beta,curPlayer,aiPlayer,startTime,timeLimit){
+  if(Date.now()-startTime>timeLimit) throw'timeout';
+  if(depth===0) return evaluateState(state,aiPlayer);
+  const moves=genMovesFromState(state,curPlayer);
+  if(moves.length===0) return evaluateState(state,aiPlayer);
+  if(curPlayer===aiPlayer){
+    let v=-Infinity;
+    for(const m of moves){
+      const ns=applyMoveToState(state,m);
+      v=Math.max(v,alphabeta(ns,depth-1,alpha,beta,1-curPlayer,aiPlayer,startTime,timeLimit));
+      alpha=Math.max(alpha,v); if(beta<=alpha) break;
+    }
+    return v;
+  }else{
+    let v=Infinity;
+    for(const m of moves){
+      const ns=applyMoveToState(state,m);
+      v=Math.min(v,alphabeta(ns,depth-1,alpha,beta,1-curPlayer,aiPlayer,startTime,timeLimit));
+      beta=Math.min(beta,v); if(beta<=alpha) break;
+    }
+    return v;
+  }
+}
+
+function findBestMove(){
+  const stateClone = cloneState(toguzFields);
+  const moves = genMovesFromState(stateClone, toguzFields[22]);
+  if(moves.length===0) return null;
+
+  if(gameMoves.length < 12){
+    const goodMoves = moves.filter(idx => toguzFields[idx] >= 2);
+    const pool = goodMoves.length > 0 ? goodMoves : moves;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  const aiPlayer = toguzFields[22];
+  const startTime = Date.now();
+  const timeLimit = 1900;
+  let bestScore = -Infinity;
+  let candidates = [];
+
+  for(let depth=1; depth<=8; depth++){
+    candidates = []; bestScore = -Infinity;
+    for(const m of moves){
+      const ns = applyMoveToState(stateClone, m);
+      let score;
+      try{
+        score = alphabeta(ns, depth-1, -Infinity, Infinity, 1-toguzFields[22], aiPlayer, startTime, timeLimit);
+      }catch(e){if(e==='timeout') break; else throw e;}
+      if(score > bestScore){ bestScore = score; candidates = [m]; }
+      else if(score === bestScore) candidates.push(m);
+    }
+    if(Date.now() - startTime > timeLimit) break;
+  }
+
+  if(candidates.length === 0) return moves[0];
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+function aiRespond(){
+  if(finished || toguzFields[22] === playerSide) { aiThinking = false; return; }
+  const best = findBestMove();
+  if(best === null){ document.getElementById('status').textContent='ИИ: без ходов'; aiThinking=false; return; }
+  aiThinking = false;
+  updateTimers();
+  make_move(best);
+}
+
+/* Кнопки */
+document.getElementById('newBtn').onclick = () => {
+  init_board();
+};
+
+document.getElementById('swapBtn').onclick = () => {
+  playerSide = 1 - playerSide;
+  document.getElementById('sideLabel').textContent = playerSide===0?'Белые (низ)':'Чёрные (верх)';
+  init_board();
+};
+
+/* Старт */
+init_board();
+</script>
+</body>
+</html>
